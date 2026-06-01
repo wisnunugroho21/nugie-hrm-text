@@ -13,8 +13,8 @@ class RotaryPositionalEmbedding(nn.Module):
         emb = torch.cat([freqs, freqs], dim=-1)  # [T, head_dim]
 
         # Non-persistent: not saved in state_dict (recomputed from theta).
-        self.register_buffer("cos_table", emb.cos(), persistent=False)
-        self.register_buffer("sin_table", emb.sin(), persistent=False)
+        self.cos_table = nn.Buffer(emb.cos(), persistent=False)
+        self.sin_table = nn.Buffer(emb.sin(), persistent=False)
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         B, T, n_heads, head_dim = x.shape

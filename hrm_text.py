@@ -2,12 +2,9 @@ import math
 
 import torch
 import torch.nn as nn
-import torch.nn.functional as F
 
 from hrm import HierarchicalReasoningModel
 from utilities import make_prefixlm_mask, trunc_normal_
-
-IGNORE_LABEL: int = -100  # tokens with this label are excluded from the loss
 
 
 class HRMText(nn.Module):
@@ -60,23 +57,18 @@ class HRMText(nn.Module):
     def forward(
         self,
         input_ids: torch.Tensor,
-        labels: torch.Tensor | None = None,
         prefix_lens: torch.Tensor | None = None,
         bp_steps: int = 5,
-    ) -> tuple[torch.Tensor | None, torch.Tensor]:
+    ) -> torch.Tensor:
         """
         Args:
             input_ids:   [B, T]  — token IDs.
-            labels:      [B, T]  — target token IDs.
-                                   Set instruction positions to -100 for the
-                                   task-completion objective (response-only loss).
             prefix_lens: [B]     — instruction token count per example.
                                    If provided, PrefixLM masking is applied;
                                    otherwise, standard causal masking is used.
             bp_steps:    int     — TBPTT window; use compute_bp_steps() during training.
 
         Returns:
-            loss:   scalar cross-entropy loss, or None if labels is not provided.
             logits: [B, T, vocab_size].
         """
         B, T = input_ids.shape
@@ -90,25 +82,12 @@ class HRMText(nn.Module):
             #           causal masking over response tokens.
             attn_mask = make_prefixlm_mask(prefix_lens, T, input_ids.device)
         else:
-            # No custom mask → SigmoidGatedAttention will use is_causal=True.
+            # No custom mask → SigmoidGatedAttention applies causal masking.
             attn_mask = None
 
         # 3. HRM recurrent forward pass.
         z_H = self.hrm(x, attn_mask=attn_mask, bp_steps=bp_steps)  # [B, T, D]
 
         # 4. Project to vocabulary logits.
-        logits = self.lm_head(z_H)  # [B, T, vocab_size]
-
-        # 5. Task-completion loss (response tokens only).
-        loss = None
-        if labels is not None:
-            # Cast to float32 for stable loss computation.
-            # Tokens with label == -100 are automatically skipped by cross_entropy.
-            loss = F.cross_entropy(
-                logits.view(-1, logits.size(-1)).float(),
-                labels.view(-1).long(),
-                ignore_index=IGNORE_LABEL,
-            )
-
-        return loss, logits
+        return self.lm_head(z_H)  # [B, T, vocab_size]
 

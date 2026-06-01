@@ -1,8 +1,11 @@
 import torch
+import torch.nn.functional as F
 
-from hrm_text import IGNORE_LABEL, HRMText
+from hrm_text import HRMText
 
 torch.manual_seed(42)
+
+IGNORE_LABEL: int = -100  # tokens with this label are excluded from the loss
 
 # Tiny config for a quick forward/backward smoke test.
 vocab_size=256
@@ -37,11 +40,17 @@ current_step = 0  # 20% of total → end of warmup period
 bp_steps = model.hrm.compute_bp_steps(current_step, total_training_steps)
 print(f"bp_steps at step {current_step}/{total_training_steps}: {bp_steps}")
 
-loss, logits = model(
+logits = model(
     input_ids,
-    labels=labels,
     prefix_lens=prefix_lens,
     bp_steps=bp_steps,
+)
+
+# Task-completion loss: cast to float32 for stability; skip instruction tokens.
+loss = F.cross_entropy(
+    logits.view(-1, vocab_size).float(),
+    labels.view(-1).long(),
+    ignore_index=IGNORE_LABEL,
 )
 
 print(f"Loss:   {loss.item():.4f}")
