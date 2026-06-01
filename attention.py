@@ -22,11 +22,11 @@ class SigmoidGatedAttention(nn.Module):
         self.num_groups = num_heads // num_kv_heads  # Q heads per KV head
         self.head_dim = hidden_size // num_heads
 
-        # Q is projected to full num_heads * head_dim
+        # Q and gate are projected to full num_heads * head_dim
         self.q_proj = nn.Linear(hidden_size, num_heads * self.head_dim, bias=False)
         self.gate_proj = nn.Linear(hidden_size, num_heads * self.head_dim, bias=False)
 
-        # K and V are projected to the smaller num_kv_heads * head_dim
+        # K and V are projected to the smaller num_kv_heads * head_dim (GQA)
         self.k_proj = nn.Linear(hidden_size, num_kv_heads * self.head_dim, bias=False)
         self.v_proj = nn.Linear(hidden_size, num_kv_heads * self.head_dim, bias=False)
         self.out_proj = nn.Linear(hidden_size, hidden_size, bias=False)
@@ -36,8 +36,13 @@ class SigmoidGatedAttention(nn.Module):
         self.scale = self.head_dim**-0.5
 
     def forward(
-        self, x: torch.Tensor, mask: torch.Tensor | None = None
+        self, x: torch.Tensor, attn_mask: torch.Tensor | None = None
     ) -> torch.Tensor:
+        """
+        x:         [B, S, D]
+        attn_mask: [B, 1, S, S] additive float mask  (0.0 = attend, -inf = block)
+                   or None → standard causal masking is applied.
+        """
         B, S, D = x.shape
         H, Hkv, G, Dh = (
             self.num_heads,
@@ -46,46 +51,52 @@ class SigmoidGatedAttention(nn.Module):
             self.head_dim,
         )
 
-        # --- Project G / Q / K / V -----------------------------------------------
-        g = self.gate_proj(x)  # (B, H,   S, Dh)
-        q = self.q_proj(x)  # (B, H,   S, Dh)
-        k = self.k_proj(x)  # (B, Hkv, S, Dh)
-        v = self.v_proj(x)  # (B, Hkv, S, Dh)
+        # --- Project Q / K / V / gate ----------------------------------------
+        q = self.q_proj(x)     # (B, S, H*Dh)
+        k = self.k_proj(x)     # (B, S, Hkv*Dh)
+        v = self.v_proj(x)     # (B, S, Hkv*Dh)
+        g = self.gate_proj(x)  # (B, S, H*Dh)
 
-        # --- Reshape: (B, S, D) → (B, H, S, Dh) ------------------------------
-        g = g.view(B, S, H, Dh)  # (B, H,   S, Dh)
-        q = q.view(B, S, H, Dh)  # (B, H,   S, Dh)
-        k = k.view(B, S, Hkv, Dh)  # (B, Hkv, S, Dh)
-        v = v.view(B, S, Hkv, Dh)  # (B, Hkv, S, Dh)
+        # --- Reshape: (B, S, H*Dh) → (B, S, H, Dh) --------------------------
+        q = q.view(B, S, H, Dh)
+        k = k.view(B, S, Hkv, Dh)
+        v = v.view(B, S, Hkv, Dh)
+        g = g.view(B, S, H, Dh)
 
-        # ── Apply RoPE to Q and K ────────────────────────────────────────────
+        # ── Apply RoPE to Q and K ─────────────────────────────────────────────
         q = self.rope(q)
         k = self.rope(k)
 
-        # --- Transpose to [B, n_heads, T, head_dim] --------------------------
+        # --- Transpose to [B, n_heads, S, head_dim] for SDPA ------------------
         q = q.transpose(1, 2)  # (B, H,   S, Dh)
         k = k.transpose(1, 2)  # (B, Hkv, S, Dh)
         v = v.transpose(1, 2)  # (B, Hkv, S, Dh)
 
-        # --- Each KV head is shared by G query heads — expand to match Q -----
+        # --- Expand KV heads to match Q heads (GQA) ---------------------------
         k = k.repeat_interleave(G, dim=1)  # (B, H, S, Dh)
         v = v.repeat_interleave(G, dim=1)  # (B, H, S, Dh)
 
-        # --- Scaled dot-product attention ------------------------------------
-        # Note: Using math formula for clarity. In production, use F.scaled_dot_product_attention(q, k, v, attn_mask=mask)
+        # --- Scaled dot-product attention -------------------------------------
+        # scores[b, h, i, j] = (Q[b,h,i,:] · K[b,h,j,:]) / √Dh
         scores = (q @ k.transpose(-2, -1)) * self.scale  # (B, H, S, S)
 
-        if mask is not None:
-            scores = scores.masked_fill(mask == 0, float("-inf"))
+        if attn_mask is not None:
+            # attn_mask is an additive float mask: 0.0 = attend, -inf = block.
+            scores = scores + attn_mask
+        else:
+            # No custom mask → apply a standard causal (lower-triangular) mask
+            # so each token only attends to itself and earlier positions.
+            causal_mask = torch.ones(S, S, dtype=torch.bool, device=q.device).tril()
+            scores = scores.masked_fill(~causal_mask, float("-inf"))
 
-        attn_weights = F.softmax(scores, dim=-1)
-        attn_out = attn_weights @ v
+        attn_weights = F.softmax(scores, dim=-1)  # (B, H, S, S)
+        attn_out = attn_weights @ v               # (B, H, S, Dh)
 
-        # --- Aggregate values, merge heads, and project ----------------------
-        attn_out = attn_out.transpose(1, 2)  # (B, T, H, Dh)
+        # --- Merge heads: (B, H, S, Dh) → (B, S, H, Dh) → (B, S, D) ---------
+        attn_out = attn_out.transpose(1, 2)  # (B, S, H, Dh)
 
-        # ── Sigmoid gate ──────────────────────────────────────────────────────
-        out = torch.sigmoid(g) * attn_out  # element-wise gate
+        # ── Sigmoid gate: element-wise gating of attention output ─────────────
+        out = torch.sigmoid(g) * attn_out
         out = out.reshape(B, S, D)
 
         return self.out_proj(out)

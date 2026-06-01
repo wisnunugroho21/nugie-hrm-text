@@ -1,10 +1,6 @@
 import torch
 
 
-def trunc_normal(tensor: torch.Tensor, std: float = 0.02) -> torch.Tensor:
-    return tensor.normal_().fmod_(3.0).mul_(1.014_762_601_732_121 * std)
-
-
 def make_prefixlm_mask(
     prefix_lens: torch.Tensor, total_len: int, device: torch.device
 ) -> torch.Tensor:
@@ -28,4 +24,11 @@ def make_prefixlm_mask(
 
 
 def trunc_normal_(tensor: torch.Tensor, std: float = 0.02) -> torch.Tensor:
-    return tensor.normal_().fmod_(3.0).mul_(1.014_762_601_732_121 * std)
+    """
+    Fast approximate truncated-normal initialisation (matches the official code).
+    Draws from N(0,1), clamps to ±3, then rescales to the desired std.
+
+    @torch.no_grad() allows safe in-place use on nn.Parameters.
+    """
+    with torch.no_grad():
+        return tensor.normal_().fmod_(3.0).mul_(1.014_762_601_732_121 * std)

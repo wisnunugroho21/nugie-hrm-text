@@ -1,5 +1,3 @@
-import math
-
 import torch
 import torch.nn as nn
 
@@ -10,7 +8,6 @@ from utilities import trunc_normal_
 class HierarchicalReasoningModel(nn.Module):
     def __init__(
         self,
-        vocab_size: int,
         hidden_size: int,
         seq_len: int,
         num_heads: int = 4,
@@ -35,13 +32,6 @@ class HierarchicalReasoningModel(nn.Module):
         self.bp_min_steps = bp_min_steps
         self.bp_max_steps = bp_max_steps
 
-        # ── f_I: Input network ───────────────────────────────────────────────
-        # Embeds token indices into continuous vectors, then adds positional
-        # information. Scaling by √D stabilises the embedding magnitudes.
-        self.embed_scale = math.sqrt(hidden_size)
-        self.embed_tokens = nn.Embedding(vocab_size, hidden_size)
-        self.embed_pos = nn.Embedding(seq_len, hidden_size)  # learned positions
-
         # ── f_L: Low-level recurrent module ─────────────────────────────────
         # Fast, detailed computation. Runs T times per high-level cycle.
         # Receives context = z_H + x̃  at every step.
@@ -56,10 +46,11 @@ class HierarchicalReasoningModel(nn.Module):
             H_layers, hidden_size, num_heads, num_kv_heads, seq_len, norm_eps, expansion
         )
 
-        self.zL_init = nn.Buffer(
-            trunc_normal_(torch.empty(hidden_size, dtype=torch.bfloat16), std=1.0),
-            persistent=True,
-        )  # NOTE: hardcoded dtype.
+        # Learned initial state for z_L: shape [D], broadcast to [B, T, D] in forward.
+        # z_H is initialised from input embeddings so needs no separate init.
+        zL_init = torch.empty(hidden_size)
+        trunc_normal_(zL_init, std=1.0)
+        self.zL_init = nn.Parameter(zL_init)
 
     def compute_bp_steps(self, step: int, total_steps: int) -> int:
         warmup = total_steps * self.bp_warmup_ratio
@@ -72,9 +63,7 @@ class HierarchicalReasoningModel(nn.Module):
 
     def forward(
         self,
-        z_H: torch.Tensor,  # (B, S, D)     — high-level carry from last call
-        z_L: torch.Tensor,  # (B, S, D)     — low-level carry from last call
-        x: torch.Tensor,  # (B, S)        — input token indices
+        x: torch.Tensor,  # (B, T, D) — input embeddings
         attn_mask: torch.Tensor | None = None,
         bp_steps: int = 5,
     ) -> torch.Tensor:
@@ -82,23 +71,26 @@ class HierarchicalReasoningModel(nn.Module):
 
         # Initialise recurrent states.
         z_H = x  # z_H₀ from token embeddings
-        z_L = self.zL_init
+        z_L = self.zL_init[None, None, :].expand(B, T, -1)  # broadcast [D] → [B, T, D]
+
+        total_L = self.H_cycles * self.L_cycles  # total L-module calls
 
         # Distribute bp_steps between H and L levels.
         # H is prioritised; L receives at least 1 step.
         H_bp = min(self.H_cycles, bp_steps - 1)
         L_bp = bp_steps - H_bp
 
+        l_step = 0  # running index of L calls (used for TBPTT cutoff)
+
         for i in range(self.H_cycles):
             # ── Fast L-level inner loop ────────────────────────────────────────
-            for k in range(i * self.L_cycles, (i + 1) * self.L_cycles):
+            for _j in range(self.L_cycles):
                 # Enable gradients only for the last L_bp L-steps.
                 # torch.is_grad_enabled() prevents re-enabling inside torch.no_grad().
-                grad_on = torch.is_grad_enabled() and (
-                    k >= self.H_cycles * self.L_cycles - L_bp
-                )
+                grad_on = torch.is_grad_enabled() and (l_step >= total_L - L_bp)
                 with torch.set_grad_enabled(grad_on):
                     z_L = self.L_net(z_L + z_H, attn_mask=attn_mask)
+                l_step += 1
 
             # ── Slow H-level update ────────────────────────────────────────────
             # Enable gradients only for the last H_bp H-steps.

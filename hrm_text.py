@@ -2,9 +2,12 @@ import math
 
 import torch
 import torch.nn as nn
+import torch.nn.functional as F
 
 from hrm import HierarchicalReasoningModel
-from utilities import make_prefixlm_mask
+from utilities import make_prefixlm_mask, trunc_normal_
+
+IGNORE_LABEL: int = -100  # tokens with this label are excluded from the loss
 
 
 class HRMText(nn.Module):
@@ -31,27 +34,28 @@ class HRMText(nn.Module):
         init_std = 1.0 / math.sqrt(hidden_size)  # LeCun std = 1/√D
         self.embed_scale = 1.0 / init_std  # runtime multiplier (= √D)
         self.embed_tokens = nn.Embedding(vocab_size, hidden_size)
+        trunc_normal_(self.embed_tokens.weight, std=init_std)
 
         # ── HRM core ──────────────────────────────────────────────────────────
         self.hrm = HierarchicalReasoningModel(
-            vocab_size,
             hidden_size,
             seq_len,
             num_heads,
             num_kv_heads,
             H_layers,
             L_layers,
-            H_cycles,  # high-level cycles
-            L_cycles,  # low-level steps per cycle
+            H_cycles,
+            L_cycles,
             norm_eps,
             expansion,
-            bp_warmup_ratio,  # Fraction of total steps for the warmup phase
-            bp_min_steps,  # TBPTT steps at the start of training  (K = 2)
-            bp_max_steps,  # TBPTT steps at the end of warmup      (K = 5)
+            bp_warmup_ratio,
+            bp_min_steps,
+            bp_max_steps,
         )
 
         # ── Output projection (no bias) ────────────────────────────────────────
         self.lm_head = nn.Linear(hidden_size, vocab_size, bias=False)
+        trunc_normal_(self.lm_head.weight, std=init_std)
 
     def forward(
         self,
@@ -95,4 +99,16 @@ class HRMText(nn.Module):
         # 4. Project to vocabulary logits.
         logits = self.lm_head(z_H)  # [B, T, vocab_size]
 
-        return logits
+        # 5. Task-completion loss (response tokens only).
+        loss = None
+        if labels is not None:
+            # Cast to float32 for stable loss computation.
+            # Tokens with label == -100 are automatically skipped by cross_entropy.
+            loss = F.cross_entropy(
+                logits.view(-1, logits.size(-1)).float(),
+                labels.view(-1).long(),
+                ignore_index=IGNORE_LABEL,
+            )
+
+        return loss, logits
+

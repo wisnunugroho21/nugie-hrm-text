@@ -4,7 +4,7 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
-from utilities import trunc_normal
+from utilities import trunc_normal_
 
 
 class SwiGLUFeedForward(nn.Module):
@@ -20,8 +20,8 @@ class SwiGLUFeedForward(nn.Module):
 
         std_in = 1.0 / math.sqrt(hidden_size)
         std_out = 1.0 / math.sqrt(inter_size)
-        trunc_normal(self.gate_up_proj.weight, std=std_in)
-        trunc_normal(self.down_proj.weight, std=std_out)
+        trunc_normal_(self.gate_up_proj.weight, std=std_in)
+        trunc_normal_(self.down_proj.weight, std=std_out)
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         gate, up = self.gate_up_proj(x).chunk(2, dim=-1)
