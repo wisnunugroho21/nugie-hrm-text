@@ -53,7 +53,7 @@ def make_prefixlm_mask(
     return float_mask
 
 
-def trunc_normal_(tensor: torch.Tensor, std: float = 0.02) -> torch.Tensor:
+def trunc_normal(tensor: torch.Tensor, std: float = 0.02) -> torch.Tensor:
     """
     In-place truncated-normal initialization.
 

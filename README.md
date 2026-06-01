@@ -150,7 +150,7 @@ Uses **SwiGLU**: projects to a gate and value branch, applies `SiLU(gate) × val
 
 ### Initialization (`utilities.py`)
 
-**Truncated normal** (`trunc_normal_`): draws from N(0,1), clamps to ±3σ, then rescales. This avoids extreme outlier weights at initialization without changing the target distribution significantly.
+**Truncated normal** (`trunc_normal`): draws from N(0,1), clamps to ±3σ, then rescales. This avoids extreme outlier weights at initialization without changing the target distribution significantly.
 
 ---
 

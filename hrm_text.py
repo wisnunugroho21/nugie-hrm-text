@@ -4,7 +4,7 @@ import torch
 import torch.nn as nn
 
 from hrm import HierarchicalReasoningModel
-from utilities import make_prefixlm_mask, trunc_normal_
+from utilities import make_prefixlm_mask, trunc_normal
 
 
 class HRMText(nn.Module):
@@ -49,8 +49,8 @@ class HRMText(nn.Module):
         norm_eps: float = 1e-6,
         expansion: float = 4 / 3,
         bp_warmup_ratio: float = 0.2,  # fraction of training steps for TBPTT warmup
-        bp_min_steps: int = 2,         # TBPTT window at the start of training
-        bp_max_steps: int = 5,         # TBPTT window at the end of warmup
+        bp_min_steps: int = 2,  # TBPTT window at the start of training
+        bp_max_steps: int = 5,  # TBPTT window at the end of warmup
     ):
         super().__init__()
 
@@ -58,9 +58,9 @@ class HRMText(nn.Module):
         # The scale multiplier (√D) is applied at runtime so the effective
         # embedding norm is ~1.0 regardless of hidden_size.
         init_std = 1.0 / math.sqrt(hidden_size)  # LeCun std = 1/√D
-        self.embed_scale = 1.0 / init_std         # runtime multiplier = √D
+        self.embed_scale = 1.0 / init_std  # runtime multiplier = √D
         self.embed_tokens = nn.Embedding(vocab_size, hidden_size)
-        trunc_normal_(self.embed_tokens.weight, std=init_std)
+        trunc_normal(self.embed_tokens.weight, std=init_std)
 
         # HRM recurrent core — handles all the dual-timescale computation.
         self.hrm = HierarchicalReasoningModel(
@@ -82,7 +82,7 @@ class HRMText(nn.Module):
         # Language model head: projects each position's hidden state to logits
         # over the full vocabulary. No bias — consistent with weight tying style.
         self.lm_head = nn.Linear(hidden_size, vocab_size, bias=False)
-        trunc_normal_(self.lm_head.weight, std=init_std)
+        trunc_normal(self.lm_head.weight, std=init_std)
 
     def forward(
         self,
@@ -121,4 +121,3 @@ class HRMText(nn.Module):
 
         # Step 4: Project hidden states to vocabulary logits.
         return self.lm_head(z_H)  # [B, T, vocab_size]
-

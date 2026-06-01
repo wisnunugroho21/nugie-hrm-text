@@ -108,7 +108,7 @@ class HRMConfig:
 
 
 @torch.no_grad()
-def trunc_normal_(tensor: torch.Tensor, std: float = 0.02) -> torch.Tensor:
+def trunc_normal(tensor: torch.Tensor, std: float = 0.02) -> torch.Tensor:
     """
     Fast approximate truncated-normal initialisation (matches the official code).
     Draws from N(0,1), clamps to ±3, then rescales to the desired std.
@@ -224,8 +224,8 @@ class SigmoidGatedAttention(nn.Module):
 
         # LeCun-normal initialisation (1 / √D), matching the official code.
         std = 1.0 / math.sqrt(D)
-        trunc_normal_(self.qkv_gate_proj.weight, std=std)
-        trunc_normal_(self.out_proj.weight, std=std)
+        trunc_normal(self.qkv_gate_proj.weight, std=std)
+        trunc_normal(self.out_proj.weight, std=std)
 
         self.rope = RotaryEmbedding(
             self.head_dim, config.max_seq_len, config.rope_theta
@@ -311,8 +311,8 @@ class SwiGLU(nn.Module):
 
         std_in = 1.0 / math.sqrt(config.hidden_size)
         std_out = 1.0 / math.sqrt(config.ffn_hidden_size)
-        trunc_normal_(self.gate_up_proj.weight, std=std_in)
-        trunc_normal_(self.down_proj.weight, std=std_out)
+        trunc_normal(self.gate_up_proj.weight, std=std_in)
+        trunc_normal(self.down_proj.weight, std=std_out)
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         gate, up = self.gate_up_proj(x).chunk(2, dim=-1)
@@ -470,7 +470,7 @@ class HRM(nn.Module):
         # z_H is initialised from input embeddings so it needs no separate init.
         # Shape: [D] — will be broadcast to [B, T, D] in forward().
         zL_init = torch.empty(config.hidden_size)
-        trunc_normal_(zL_init, std=1.0)
+        trunc_normal(zL_init, std=1.0)
         self.zL_init = nn.Parameter(zL_init)
 
     def compute_bp_steps(self, step: int, total_steps: int) -> int:
@@ -645,7 +645,7 @@ class HRMText(nn.Module):
         init_std = 1.0 / math.sqrt(config.hidden_size)  # LeCun std = 1/√D
         self.embed_tokens = nn.Embedding(config.vocab_size, config.hidden_size)
         with torch.no_grad():
-            trunc_normal_(self.embed_tokens.weight, std=init_std)
+            trunc_normal(self.embed_tokens.weight, std=init_std)
         self.embed_scale = 1.0 / init_std  # runtime multiplier (= √D)
 
         # ── HRM core ──────────────────────────────────────────────────────────
@@ -654,7 +654,7 @@ class HRMText(nn.Module):
         # ── Output projection (no bias) ────────────────────────────────────────
         self.lm_head = nn.Linear(config.hidden_size, config.vocab_size, bias=False)
         with torch.no_grad():
-            trunc_normal_(self.lm_head.weight, std=init_std)
+            trunc_normal(self.lm_head.weight, std=init_std)
 
     def forward(
         self,

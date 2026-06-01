@@ -2,7 +2,7 @@ import torch
 import torch.nn as nn
 
 from reasoning_module import ReasoningModule
-from utilities import trunc_normal_
+from utilities import trunc_normal
 
 
 class HierarchicalReasoningModel(nn.Module):
@@ -58,8 +58,8 @@ class HierarchicalReasoningModel(nn.Module):
         norm_eps: float = 1e-6,
         expansion: float = 4 / 3,
         bp_warmup_ratio: float = 0.2,  # fraction of total training steps for TBPTT warmup
-        bp_min_steps: int = 2,         # TBPTT window at the start of training
-        bp_max_steps: int = 5,         # TBPTT window at the end of warmup
+        bp_min_steps: int = 2,  # TBPTT window at the start of training
+        bp_max_steps: int = 5,  # TBPTT window at the end of warmup
     ):
         super().__init__()
         self.H_cycles = H_cycles
@@ -89,7 +89,7 @@ class HierarchicalReasoningModel(nn.Module):
         # Learned initial state for z_L (shape [D], broadcast to [B, T, D]).
         # z_H starts from the input embeddings so it doesn't need a separate init.
         zL_init = torch.empty(hidden_size)
-        trunc_normal_(zL_init, std=1.0)
+        trunc_normal(zL_init, std=1.0)
         self.zL_init = nn.Parameter(zL_init)
 
     def compute_bp_steps(self, step: int, total_steps: int) -> int:
@@ -112,9 +112,9 @@ class HierarchicalReasoningModel(nn.Module):
 
     def forward(
         self,
-        x: torch.Tensor,          # (B, T, D) — input embeddings
+        x: torch.Tensor,  # (B, T, D) — input embeddings
         attn_mask: torch.Tensor | None = None,
-        bp_steps: int = 5,        # TBPTT window; use compute_bp_steps() during training
+        bp_steps: int = 5,  # TBPTT window; use compute_bp_steps() during training
     ) -> torch.Tensor:
         B, T, _ = x.shape
 
@@ -122,26 +122,23 @@ class HierarchicalReasoningModel(nn.Module):
         z_H = x  # H starts from the token embeddings (encodes input structure)
         z_L = self.zL_init[None, None, :].expand(B, T, -1)  # broadcast [D] → [B, T, D]
 
-        total_L = self.H_cycles * self.L_cycles  # total number of L-module calls
-
         # Distribute bp_steps across the two levels:
         # H is prioritized; L gets at least 1 gradient step.
         H_bp = min(self.H_cycles, bp_steps - 1)
         L_bp = bp_steps - H_bp
 
-        l_step = 0  # running count of L-module calls (used for TBPTT cutoff)
-
         for i in range(self.H_cycles):
             # --- Inner L-level loop -------------------------------------------
-            for _j in range(self.L_cycles):
+            for j in range(i * self.L_cycles, (i + 1) * self.L_cycles):
                 # Only enable gradients for the last L_bp calls to L_net.
                 # torch.is_grad_enabled() check avoids re-enabling grad inside
                 # an outer torch.no_grad() context (e.g., during validation).
-                grad_on = torch.is_grad_enabled() and (l_step >= total_L - L_bp)
+                grad_on = torch.is_grad_enabled() and (
+                    j >= self.H_cycles * self.L_cycles - L_bp
+                )
                 with torch.set_grad_enabled(grad_on):
                     # L receives the sum of its own state and the H state as context.
                     z_L = self.L_net(z_L + z_H, attn_mask=attn_mask)
-                l_step += 1
 
             # --- Outer H-level update -----------------------------------------
             # Only enable gradients for the last H_bp calls to H_net.
