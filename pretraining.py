@@ -41,6 +41,7 @@ import torch.nn.functional as F
 from torch.utils.data import DataLoader, Dataset
 
 from hrm_text import HRMText
+from adam_atan2 import AdamAtan2
 
 # Tokens with this label are skipped by PyTorch's cross-entropy loss.
 IGNORE_LABEL: int = -100
@@ -59,9 +60,9 @@ class PretrainConfig:
     Architecture fields map 1-to-1 with HRMText.__init__ keyword arguments.
     Adjust them to match your tokenizer vocabulary and desired model size.
 
-    The official paper uses AdamATan2 (a scale-invariant Adam variant).
-    This implementation uses standard AdamW for broad compatibility; the
-    learning-rate schedule and TBPTT warmup are identical to the paper.
+    The official paper uses AdamAtan2 (a scale-invariant Adam variant).
+    This implementation uses AdamAtan2, matching the paper exactly.
+    The learning-rate schedule and TBPTT warmup are identical to the paper.
     """
 
     # ── Dataset ───────────────────────────────────────────────────────────────
@@ -339,8 +340,8 @@ class EMA:
 
     EMA weights are smoother than the live weights and are conventionally
     preferred for evaluation and checkpoint export. The official HRM-Text code
-    integrates EMA directly into its AdamATan2 optimizer; this class provides
-    the same behaviour alongside standard AdamW.
+    integrates EMA directly into its AdamAtan2 optimizer; this class provides
+    the same behaviour alongside AdamAtan2.
     """
 
     def __init__(self, model: nn.Module, decay: float = 0.9999):
@@ -533,7 +534,7 @@ def train(
     #    and DO get weight decay, which matches the official implementation).
     decay_params = [p for p in model.parameters() if p.requires_grad and p.ndim >= 2]
     no_decay_params = [p for p in model.parameters() if p.requires_grad and p.ndim < 2]
-    optimizer = torch.optim.AdamW(
+    optimizer = AdamAtan2(
         [
             {"params": decay_params, "weight_decay": config.weight_decay},
             {"params": no_decay_params, "weight_decay": 0.0},

@@ -14,6 +14,7 @@ import torch
 import torch.nn.functional as F
 
 from hrm_text import HRMText
+from adam_atan2 import AdamAtan2
 
 torch.manual_seed(42)
 
@@ -44,6 +45,8 @@ model = HRMText(
 )
 total_params = sum(p.numel() for p in model.parameters())
 print(f"Model parameters: {total_params:,}")
+
+optimizer = AdamAtan2(model.parameters(), lr=1e-3, betas=(0.9, 0.999), weight_decay=0.01)
 
 # ── Dummy instruction–response batch ──────────────────────────────────────────
 B, T = 2, 16
@@ -89,3 +92,8 @@ print(f"Logits: {logits.shape}")  # expected: [2, 16, 256]
 # Backward pass to verify gradients flow through the TBPTT window.
 loss.backward()
 print("Backward pass OK.")
+
+# Optimizer step.
+optimizer.step()
+optimizer.zero_grad()
+print("Optimizer step OK (AdamAtan2).")
