@@ -53,7 +53,7 @@ class HierarchicalReasoningModel(nn.Module):
         num_kv_heads: int = 2,
         H_layers: int = 2,
         L_layers: int = 2,
-        H_cycles: int = 3,  # number of outer (high-level) cycles
+        H_cycles: int = 2,  # number of outer (high-level) cycles
         L_cycles: int = 3,  # number of inner (low-level) steps per cycle
         norm_eps: float = 1e-6,
         expansion: float = 4 / 3,
