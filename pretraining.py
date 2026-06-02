@@ -105,6 +105,9 @@ class PretrainConfig:
     checkpoint_interval: int = 1   # save a checkpoint every N epochs
     log_interval: int = 10         # print a metrics line every N steps
 
+    # ── Collation ─────────────────────────────────────────────────────────────
+    pad_token_id: int = 0              # used to right-pad variable-length sequences
+
     # ── Device ────────────────────────────────────────────────────────────────
     device: str = "cuda" if torch.cuda.is_available() else "cpu"
 
@@ -143,6 +146,123 @@ class InstructionDataset(Dataset):
                 "input_ids":  torch.tensor(seq, dtype=torch.long),
                 "prefix_len": min(len(instr), max_seq_len),
             })
+
+    def __len__(self) -> int:
+        return len(self.examples)
+
+    def __getitem__(self, idx: int) -> dict:
+        return self.examples[idx]
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+# 3. HuggingFace Dataset — official HRM-Text pretraining data
+# ──────────────────────────────────────────────────────────────────────────────
+
+class HRMTextDataset(Dataset):
+    """
+    Official HRM-Text pretraining dataset loaded from HuggingFace.
+
+    Source   : sapientinc/HRM-Text-data-io-cleaned-20260515
+    Tokenizer: sapientinc/HRM-Text-1B  (65 536-token custom BPE)
+
+    Each row in the raw dataset has three fields:
+        instruction : str  — the question or problem statement
+        response    : str  — the expected answer
+        condition   : str  — task-style tag (e.g. "direct", "cot", "synth,cot")
+
+    These are encoded into a single token sequence using the format from the paper:
+
+        <|im_start|> {condition_tokens...} {instruction_tokens} <|im_end|>
+        {response_tokens} <eos>
+                          ↑
+             prefix boundary (prefix_len)
+
+    The prefix (everything up to and including <|im_end|>) receives bidirectional
+    PrefixLM attention. Response tokens are generated causally with full supervision.
+
+    Requirements
+    ────────────
+        pip install datasets transformers
+    """
+
+    # Condition tag → special token string (from the model card).
+    # A condition string may be comma-separated (e.g. "synth,cot") to stack tokens.
+    # These special tokens signal the expected response style to the model:
+    #   direct  → straightforward answer, no chain-of-thought
+    #   cot     → chain-of-thought reasoning
+    #   noisy   → noisy / web-scraped training signal
+    #   synth   → synthetic / curated data
+    CONDITION_MAP: dict[str, str] = {
+        "direct": "<|object_ref_start|>",
+        "cot":    "<|object_ref_end|>",
+        "noisy":  "<|quad_start|>",
+        "synth":  "<|quad_end|>",
+    }
+
+    def __init__(
+        self,
+        tokenizer,
+        split: str = "train",
+        max_seq_len: int = 2048,
+        max_samples: Optional[int] = None,
+    ):
+        """
+        Args:
+            tokenizer   : HuggingFace tokenizer from sapientinc/HRM-Text-1B.
+            split       : dataset split ("train" is the only available split).
+            max_seq_len : sequences longer than this are right-truncated.
+            max_samples : if set, load only the first N examples; useful for
+                          quick experiments. Leave as None for the full dataset.
+        """
+        from datasets import load_dataset
+
+        raw = load_dataset(
+            "sapientinc/HRM-Text-data-io-cleaned-20260515",
+            split=split,
+        )
+        if max_samples is not None:
+            raw = raw.select(range(min(max_samples, len(raw))))
+
+        self.examples: list[dict] = []
+
+        # Pre-compute the bracket token IDs once so we don't re-encode them per row.
+        im_start_ids = tokenizer.encode("<|im_start|>", add_special_tokens=False)
+        im_end_ids   = tokenizer.encode("<|im_end|>",   add_special_tokens=False)
+        eos_ids      = (
+            [tokenizer.eos_token_id] if tokenizer.eos_token_id is not None else []
+        )
+
+        print(f"[HRMTextDataset] Tokenizing {len(raw):,} examples …")
+        for row in raw:
+            # Build the instruction prefix: <|im_start|> condition instruction <|im_end|>
+            condition_ids: list[int] = []
+            for tag in row.get("condition", "direct").split(","):
+                tag = tag.strip()
+                special = self.CONDITION_MAP.get(tag)
+                if special is not None:
+                    condition_ids += tokenizer.encode(special, add_special_tokens=False)
+
+            instr_ids = (
+                im_start_ids
+                + condition_ids
+                + tokenizer.encode(row["instruction"], add_special_tokens=False)
+                + im_end_ids
+            )
+            resp_ids = (
+                tokenizer.encode(row["response"], add_special_tokens=False)
+                + eos_ids
+            )
+
+            # Right-truncate the full sequence to max_seq_len.
+            seq      = (instr_ids + resp_ids)[:max_seq_len]
+            plen     = min(len(instr_ids), max_seq_len)
+
+            self.examples.append({
+                "input_ids":  torch.tensor(seq, dtype=torch.long),
+                "prefix_len": plen,
+            })
+
+        print(f"[HRMTextDataset] Ready — {len(self.examples):,} examples.")
 
     def __len__(self) -> int:
         return len(self.examples)
@@ -330,7 +450,7 @@ def load_checkpoint(
 
 def train(
     config: PretrainConfig,
-    train_samples: list[tuple[list[int], list[int]]],
+    dataset: Dataset,
     resume_from: Optional[str] = None,
 ) -> tuple[HRMText, Optional[EMA]]:
     """
@@ -348,9 +468,11 @@ def train(
       6. Learning-rate update (warmup + cosine decay).
 
     Args:
-        config        : all training hyperparameters (see PretrainConfig).
-        train_samples : tokenized (instruction_ids, response_ids) pairs.
-        resume_from   : optional path to a .pt checkpoint file to resume from.
+        config      : all training hyperparameters (see PretrainConfig).
+        dataset     : a torch Dataset yielding {"input_ids", "prefix_len"} dicts.
+                      Use HRMTextDataset for the official pretraining data, or
+                      InstructionDataset for pre-tokenized custom data.
+        resume_from : optional path to a .pt checkpoint file to resume from.
 
     Returns:
         (model, ema) — the trained model and its EMA, or (model, None) if EMA
@@ -359,13 +481,12 @@ def train(
     torch.manual_seed(config.seed)
     device = torch.device(config.device)
 
-    # ── Dataset & dataloader ──────────────────────────────────────────────────
-    dataset = InstructionDataset(train_samples, config.max_seq_len)
+    # ── Dataloader ────────────────────────────────────────────────────────────
     dataloader = DataLoader(
         dataset,
         batch_size=config.global_batch_size,
         shuffle=True,
-        collate_fn=lambda b: collate_fn(b, pad_token_id=0),
+        collate_fn=lambda b: collate_fn(b, pad_token_id=config.pad_token_id),
         drop_last=True,   # drop partial batches to keep gradient norms stable
         num_workers=0,
     )
@@ -507,43 +628,63 @@ def train(
 
 if __name__ == "__main__":
     """
-    Quick smoke test: tiny model on randomly generated instruction–response pairs.
+    Pre-train an HRM-Text model on the official HRM-Text pretraining data.
 
-    Verifies that the entire pipeline (dataset → collation → forward → loss →
-    backward → checkpoint) runs without errors in a few seconds on CPU.
+    The tokenizer and dataset are both pulled from HuggingFace:
+        tokenizer : sapientinc/HRM-Text-1B
+        dataset   : sapientinc/HRM-Text-data-io-cleaned-20260515
 
-    For real pre-training, replace `dummy_samples` with your tokenized data and
-    set PretrainConfig fields to match your vocabulary and target model size.
+    Architecture and optimizer settings below match the 1B model from the paper
+    (Section 3.1). Reduce hidden_size / num_heads / layers for smaller runs.
+    Set max_samples=None to use the full dataset for production training.
+
+    Requirements:
+        pip install datasets transformers
     """
-    torch.manual_seed(0)
+    from transformers import AutoTokenizer
 
-    cfg = PretrainConfig(
-        vocab_size=256,
-        hidden_size=64,
-        num_heads=4,
-        num_kv_heads=2,
-        H_layers=2,
-        L_layers=2,
-        H_cycles=2,
-        L_cycles=3,
-        max_seq_len=32,
-        global_batch_size=4,
-        epochs=2,
-        lr=3e-4,
-        lr_warmup_steps=5,
-        ema_decay=0.999,
-        checkpoint_dir="checkpoints_test",
-        log_interval=2,
-        device="cpu",
+    print("Loading tokenizer …")
+    tokenizer = AutoTokenizer.from_pretrained("sapientinc/HRM-Text-1B")
+
+    # Use the tokenizer's pad token; fall back to EOS if none is explicitly defined.
+    pad_id = (
+        tokenizer.pad_token_id
+        if tokenizer.pad_token_id is not None
+        else tokenizer.eos_token_id
     )
 
-    # 8 instruction tokens + 16 response tokens per example, 32 examples total.
-    dummy_samples = [
-        (
-            torch.randint(1, cfg.vocab_size, (8,)).tolist(),   # instruction
-            torch.randint(1, cfg.vocab_size, (16,)).tolist(),  # response
-        )
-        for _ in range(32)
-    ]
+    cfg = PretrainConfig(
+        # ── Architecture: 1B-model dimensions (Section 3.1) ───────────────────
+        vocab_size   = tokenizer.vocab_size,  # 65 536
+        hidden_size  = 1536,
+        num_heads    = 12,
+        num_kv_heads = 6,
+        H_layers     = 16,
+        L_layers     = 16,
+        H_cycles     = 2,
+        L_cycles     = 3,
+        max_seq_len  = 4096,
+        pad_token_id = pad_id,
 
-    train(cfg, dummy_samples)
+        # ── Optimizer: paper values (Section 2.2) ─────────────────────────────
+        global_batch_size = 4,       # increase for multi-GPU / real runs
+        epochs            = 1,
+        lr                = 2.2e-4,
+        lr_warmup_steps   = 2000,
+        beta1             = 0.9,
+        beta2             = 0.95,
+        weight_decay      = 0.1,
+        ema_decay         = 0.9999,
+
+        checkpoint_dir    = "checkpoints",
+        log_interval      = 10,
+    )
+
+    dataset = HRMTextDataset(
+        tokenizer   = tokenizer,
+        split       = "train",
+        max_seq_len = cfg.max_seq_len,
+        max_samples = 64,   # set to None to use the full dataset
+    )
+
+    train(cfg, dataset)
