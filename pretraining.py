@@ -50,6 +50,7 @@ IGNORE_LABEL: int = -100
 # 1. Training Configuration
 # ──────────────────────────────────────────────────────────────────────────────
 
+
 @dataclass
 class PretrainConfig:
     """
@@ -64,49 +65,49 @@ class PretrainConfig:
     """
 
     # ── Dataset ───────────────────────────────────────────────────────────────
-    max_seq_len: int = 2048        # max tokens per example (instruction + response)
+    max_seq_len: int = 2048  # max tokens per example (instruction + response)
 
     # ── Model architecture ────────────────────────────────────────────────────
     vocab_size: int = 32_000
     hidden_size: int = 1024
     num_heads: int = 8
-    num_kv_heads: int = 4          # GQA: fewer KV heads share Q heads
-    H_layers: int = 4              # transformer layers in the slow H module
-    L_layers: int = 4              # transformer layers in the fast L module
-    H_cycles: int = 2              # outer H cycles per forward pass
-    L_cycles: int = 3              # inner L cycles per H cycle (H2L3 in the paper)
+    num_kv_heads: int = 4  # GQA: fewer KV heads share Q heads
+    H_layers: int = 4  # transformer layers in the slow H module
+    L_layers: int = 4  # transformer layers in the fast L module
+    H_cycles: int = 2  # outer H cycles per forward pass
+    L_cycles: int = 3  # inner L cycles per H cycle (H2L3 in the paper)
     norm_eps: float = 1e-6
-    expansion: float = 4 / 3      # SwiGLU inner-width multiplier
+    expansion: float = 4 / 3  # SwiGLU inner-width multiplier
 
     # ── Training ──────────────────────────────────────────────────────────────
-    global_batch_size: int = 512   # sequences per step (all GPUs combined)
-    epochs: int = 4                # passes over the training data
+    global_batch_size: int = 512  # sequences per step (all GPUs combined)
+    epochs: int = 4  # passes over the training data
     seed: int = 0
 
     # ── Optimizer ─────────────────────────────────────────────────────────────
-    lr: float = 3e-4               # peak learning rate
-    lr_min_ratio: float = 0.1      # final LR = lr * lr_min_ratio
-    lr_warmup_steps: int = 2000    # steps to linearly ramp LR from 0 to lr
+    lr: float = 3e-4  # peak learning rate
+    lr_min_ratio: float = 0.1  # final LR = lr * lr_min_ratio
+    lr_warmup_steps: int = 2000  # steps to linearly ramp LR from 0 to lr
     weight_decay: float = 0.1
     beta1: float = 0.9
     beta2: float = 0.95
-    grad_clip: float = 1.0         # gradient norm clipping (0 = disabled)
+    grad_clip: float = 1.0  # gradient norm clipping (0 = disabled)
 
     # ── EMA (Exponential Moving Average of weights) ────────────────────────────
-    ema_decay: Optional[float] = 0.9999   # set to None to disable EMA
+    ema_decay: Optional[float] = 0.9999  # set to None to disable EMA
 
     # ── Truncated BPTT schedule ───────────────────────────────────────────────
-    bp_warmup_ratio: float = 0.2   # fraction of total steps to warm up bp_steps
-    bp_min_steps: int = 2          # TBPTT window at the very start of training
-    bp_max_steps: int = 5          # TBPTT window after warmup is complete
+    bp_warmup_ratio: float = 0.2  # fraction of total steps to warm up bp_steps
+    bp_min_steps: int = 2  # TBPTT window at the very start of training
+    bp_max_steps: int = 5  # TBPTT window after warmup is complete
 
     # ── Checkpointing & logging ────────────────────────────────────────────────
     checkpoint_dir: str = "checkpoints"
-    checkpoint_interval: int = 1   # save a checkpoint every N epochs
-    log_interval: int = 10         # print a metrics line every N steps
+    checkpoint_interval: int = 1  # save a checkpoint every N epochs
+    log_interval: int = 10  # print a metrics line every N steps
 
     # ── Collation ─────────────────────────────────────────────────────────────
-    pad_token_id: int = 0              # used to right-pad variable-length sequences
+    pad_token_id: int = 0  # used to right-pad variable-length sequences
 
     # ── Device ────────────────────────────────────────────────────────────────
     device: str = "cuda" if torch.cuda.is_available() else "cpu"
@@ -115,6 +116,7 @@ class PretrainConfig:
 # ──────────────────────────────────────────────────────────────────────────────
 # 2. Dataset — instruction–response pairs
 # ──────────────────────────────────────────────────────────────────────────────
+
 
 class InstructionDataset(Dataset):
     """
@@ -142,10 +144,12 @@ class InstructionDataset(Dataset):
         for instr, resp in samples:
             # Concatenate instruction and response, then right-truncate.
             seq = (instr + resp)[:max_seq_len]
-            self.examples.append({
-                "input_ids":  torch.tensor(seq, dtype=torch.long),
-                "prefix_len": min(len(instr), max_seq_len),
-            })
+            self.examples.append(
+                {
+                    "input_ids": torch.tensor(seq, dtype=torch.long),
+                    "prefix_len": min(len(instr), max_seq_len),
+                }
+            )
 
     def __len__(self) -> int:
         return len(self.examples)
@@ -157,6 +161,7 @@ class InstructionDataset(Dataset):
 # ──────────────────────────────────────────────────────────────────────────────
 # 3. HuggingFace Dataset — official HRM-Text pretraining data
 # ──────────────────────────────────────────────────────────────────────────────
+
 
 class HRMTextDataset(Dataset):
     """
@@ -194,9 +199,9 @@ class HRMTextDataset(Dataset):
     #   synth   → synthetic / curated data
     CONDITION_MAP: dict[str, str] = {
         "direct": "<|object_ref_start|>",
-        "cot":    "<|object_ref_end|>",
-        "noisy":  "<|quad_start|>",
-        "synth":  "<|quad_end|>",
+        "cot": "<|object_ref_end|>",
+        "noisy": "<|quad_start|>",
+        "synth": "<|quad_end|>",
     }
 
     def __init__(
@@ -227,10 +232,8 @@ class HRMTextDataset(Dataset):
 
         # Pre-compute the bracket token IDs once so we don't re-encode them per row.
         im_start_ids = tokenizer.encode("<|im_start|>", add_special_tokens=False)
-        im_end_ids   = tokenizer.encode("<|im_end|>",   add_special_tokens=False)
-        eos_ids      = (
-            [tokenizer.eos_token_id] if tokenizer.eos_token_id is not None else []
-        )
+        im_end_ids = tokenizer.encode("<|im_end|>", add_special_tokens=False)
+        eos_ids = [tokenizer.eos_token_id] if tokenizer.eos_token_id is not None else []
 
         print(f"[HRMTextDataset] Tokenizing {len(raw):,} examples …")
         for row in raw:
@@ -249,18 +252,19 @@ class HRMTextDataset(Dataset):
                 + im_end_ids
             )
             resp_ids = (
-                tokenizer.encode(row["response"], add_special_tokens=False)
-                + eos_ids
+                tokenizer.encode(row["response"], add_special_tokens=False) + eos_ids
             )
 
             # Right-truncate the full sequence to max_seq_len.
-            seq      = (instr_ids + resp_ids)[:max_seq_len]
-            plen     = min(len(instr_ids), max_seq_len)
+            seq = (instr_ids + resp_ids)[:max_seq_len]
+            plen = min(len(instr_ids), max_seq_len)
 
-            self.examples.append({
-                "input_ids":  torch.tensor(seq, dtype=torch.long),
-                "prefix_len": plen,
-            })
+            self.examples.append(
+                {
+                    "input_ids": torch.tensor(seq, dtype=torch.long),
+                    "prefix_len": plen,
+                }
+            )
 
         print(f"[HRMTextDataset] Ready — {len(self.examples):,} examples.")
 
@@ -291,10 +295,10 @@ def collate_fn(
 
     input_ids_list, labels_list, prefix_lens = [], [], []
     for item in batch:
-        ids  = item["input_ids"]   # [T]
+        ids = item["input_ids"]  # [T]
         plen = item["prefix_len"]
-        T    = ids.size(0)
-        pad  = max_len - T
+        T = ids.size(0)
+        pad = max_len - T
 
         # Right-pad input_ids to the batch's max length.
         padded = F.pad(ids, (0, pad), value=pad_token_id)  # [max_len]
@@ -313,8 +317,8 @@ def collate_fn(
         prefix_lens.append(plen)
 
     return {
-        "input_ids":   torch.stack(input_ids_list),                   # [B, T]
-        "labels":      torch.stack(labels_list),                      # [B, T]
+        "input_ids": torch.stack(input_ids_list),  # [B, T]
+        "labels": torch.stack(labels_list),  # [B, T]
         "prefix_lens": torch.tensor(prefix_lens, dtype=torch.long),  # [B]
     }
 
@@ -322,6 +326,7 @@ def collate_fn(
 # ──────────────────────────────────────────────────────────────────────────────
 # 3. EMA — Exponential Moving Average of model weights
 # ──────────────────────────────────────────────────────────────────────────────
+
 
 class EMA:
     """
@@ -370,6 +375,7 @@ class EMA:
 # 4. Learning-Rate Schedule
 # ──────────────────────────────────────────────────────────────────────────────
 
+
 def compute_lr(step: int, total_steps: int, config: PretrainConfig) -> float:
     """
     Linear-warmup → cosine-decay learning-rate schedule.
@@ -396,6 +402,7 @@ def compute_lr(step: int, total_steps: int, config: PretrainConfig) -> float:
 # 5. Checkpointing
 # ──────────────────────────────────────────────────────────────────────────────
 
+
 def save_checkpoint(
     path: str,
     model: nn.Module,
@@ -409,12 +416,12 @@ def save_checkpoint(
     os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
     torch.save(
         {
-            "step":      step,
-            "epoch":     epoch,
-            "model":     model.state_dict(),
+            "step": step,
+            "epoch": epoch,
+            "model": model.state_dict(),
             "optimizer": optimizer.state_dict(),
-            "ema":       ema.state_dict() if ema is not None else None,
-            "config":    config,
+            "ema": ema.state_dict() if ema is not None else None,
+            "config": config,
         },
         path,
     )
@@ -447,6 +454,7 @@ def load_checkpoint(
 # ──────────────────────────────────────────────────────────────────────────────
 # 6. Training Loop
 # ──────────────────────────────────────────────────────────────────────────────
+
 
 def train(
     config: PretrainConfig,
@@ -487,7 +495,7 @@ def train(
         batch_size=config.global_batch_size,
         shuffle=True,
         collate_fn=lambda b: collate_fn(b, pad_token_id=config.pad_token_id),
-        drop_last=True,   # drop partial batches to keep gradient norms stable
+        drop_last=True,  # drop partial batches to keep gradient norms stable
         num_workers=0,
     )
 
@@ -515,17 +523,19 @@ def train(
 
     num_params = sum(p.numel() for p in model.parameters())
     print(f"Parameters : {num_params:,}")
-    print(f"Total steps: {total_steps}  "
-          f"({config.epochs} epochs × {len(dataloader)} steps/epoch)")
+    print(
+        f"Total steps: {total_steps}  "
+        f"({config.epochs} epochs × {len(dataloader)} steps/epoch)"
+    )
 
     # ── Optimizer — apply weight decay only to weight matrices, not to biases
     #    or 1-D tensors (embeddings excluded here have shape [V, D] so ndim==2
     #    and DO get weight decay, which matches the official implementation).
-    decay_params    = [p for p in model.parameters() if p.requires_grad and p.ndim >= 2]
+    decay_params = [p for p in model.parameters() if p.requires_grad and p.ndim >= 2]
     no_decay_params = [p for p in model.parameters() if p.requires_grad and p.ndim < 2]
     optimizer = torch.optim.AdamW(
         [
-            {"params": decay_params,    "weight_decay": config.weight_decay},
+            {"params": decay_params, "weight_decay": config.weight_decay},
             {"params": no_decay_params, "weight_decay": 0.0},
         ],
         lr=config.lr,
@@ -541,21 +551,21 @@ def train(
         start_step, start_epoch = load_checkpoint(
             resume_from, model, optimizer, ema, config.device
         )
-        start_epoch += 1   # the loaded epoch is complete; begin the next one
+        start_epoch += 1  # the loaded epoch is complete; begin the next one
 
     # ── Main training loop ────────────────────────────────────────────────────
     step = start_step
     model.train()
 
     for epoch in range(start_epoch, config.epochs + 1):
-        epoch_loss_sum   = 0.0
+        epoch_loss_sum = 0.0
         epoch_token_count = 0
 
         for batch in dataloader:
             step += 1
 
-            input_ids   = batch["input_ids"].to(device)    # [B, T]
-            labels      = batch["labels"].to(device)       # [B, T]
+            input_ids = batch["input_ids"].to(device)  # [B, T]
+            labels = batch["labels"].to(device)  # [B, T]
             prefix_lens = batch["prefix_lens"].to(device)  # [B]
 
             # ── 1. Compute TBPTT window for this step ─────────────────────
@@ -578,7 +588,7 @@ def train(
             # Cast logits to float32 for numerical stability before softmax.
             loss = F.cross_entropy(
                 logits.view(-1, config.vocab_size).float(),  # [B*T, vocab_size]
-                labels.view(-1),                             # [B*T]
+                labels.view(-1),  # [B*T]
                 ignore_index=IGNORE_LABEL,
             )
 
@@ -600,7 +610,7 @@ def train(
 
             # Track loss weighted by supervised token count for a proper average.
             n_supervised = (labels != IGNORE_LABEL).sum().item()
-            epoch_loss_sum    += loss.item() * n_supervised
+            epoch_loss_sum += loss.item() * n_supervised
             epoch_token_count += n_supervised
 
             if step % config.log_interval == 0:
@@ -655,36 +665,34 @@ if __name__ == "__main__":
 
     cfg = PretrainConfig(
         # ── Architecture: 1B-model dimensions (Section 3.1) ───────────────────
-        vocab_size   = tokenizer.vocab_size,  # 65 536
-        hidden_size  = 1536,
-        num_heads    = 12,
-        num_kv_heads = 6,
-        H_layers     = 16,
-        L_layers     = 16,
-        H_cycles     = 2,
-        L_cycles     = 3,
-        max_seq_len  = 4096,
-        pad_token_id = pad_id,
-
+        vocab_size=tokenizer.vocab_size,  # 65 536
+        hidden_size=1536,
+        num_heads=12,
+        num_kv_heads=6,
+        H_layers=16,
+        L_layers=16,
+        H_cycles=2,
+        L_cycles=3,
+        max_seq_len=4096,
+        pad_token_id=pad_id,
         # ── Optimizer: paper values (Section 2.2) ─────────────────────────────
-        global_batch_size = 4,       # increase for multi-GPU / real runs
-        epochs            = 1,
-        lr                = 2.2e-4,
-        lr_warmup_steps   = 2000,
-        beta1             = 0.9,
-        beta2             = 0.95,
-        weight_decay      = 0.1,
-        ema_decay         = 0.9999,
-
-        checkpoint_dir    = "checkpoints",
-        log_interval      = 10,
+        global_batch_size=4,  # increase for multi-GPU / real runs
+        epochs=1,
+        lr=2.2e-4,
+        lr_warmup_steps=2000,
+        beta1=0.9,
+        beta2=0.95,
+        weight_decay=0.1,
+        ema_decay=0.9999,
+        checkpoint_dir="checkpoints",
+        log_interval=10,
     )
 
     dataset = HRMTextDataset(
-        tokenizer   = tokenizer,
-        split       = "train",
-        max_seq_len = cfg.max_seq_len,
-        max_samples = 64,   # set to None to use the full dataset
+        tokenizer=tokenizer,
+        split="train",
+        max_seq_len=cfg.max_seq_len,
+        max_samples=64,  # set to None to use the full dataset
     )
 
     train(cfg, dataset)
