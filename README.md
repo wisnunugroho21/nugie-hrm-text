@@ -40,17 +40,19 @@ Both H and L share the same layer budget as a single-pass Transformer (each gets
 
 ```
 nugie-hrm-text/
-├── main.py             # Smoke test: forward + backward pass
-├── hrm_text.py         # Top-level model: embedding → HRM → LM head
-├── hrm.py              # HierarchicalReasoningModel: the dual-timescale loop
-├── reasoning_module.py # Single recurrent module (H or L) with MagicNorm
-├── transformer.py      # TransformerBlock: PreNorm attention + FFN
-├── attention.py        # SigmoidGatedAttention with GQA and RoPE
-├── swiglu.py           # SwiGLU feed-forward network
-├── rope.py             # Rotary Positional Embedding (RoPE)
-├── rmsnorm.py          # Parameterless RMSNorm
-├── utilities.py        # PrefixLM mask builder + truncated-normal init
-└── v1.py               # Self-contained single-file reference implementation
+├── main.py                   # Smoke test: forward + backward pass
+├── pretraining.py            # Pre-training loop with task-completion objective
+├── hrm_text.py               # Top-level model: embedding → HRM → LM head
+├── hrm.py                    # HierarchicalReasoningModel: the dual-timescale loop
+├── reasoning_module.py       # Single recurrent module (H or L) with MagicNorm
+├── transformer.py            # TransformerBlock: PreNorm attention + FFN
+├── attention.py              # SigmoidGatedAttention with GQA and RoPE
+├── swiglu.py                 # SwiGLU feed-forward network
+├── rope.py                   # Rotary Positional Embedding (RoPE)
+├── rmsnorm.py                # Parameterless RMSNorm
+├── adam_atan2.py             # AdamAtan2 optimizer (epsilon-free)
+├── utilities.py              # PrefixLM mask builder + truncated-normal init
+└── nugie_hrm_text_colab.ipynb # Jupyter notebook for Colab experimentation
 ```
 
 ### Module Relationships
@@ -89,6 +91,7 @@ bp_steps at step 0/100000: 2
 Loss:   5.5432
 Logits: torch.Size([2, 16, 256])
 Backward pass OK.
+Optimizer step OK (AdamAtan2).
 ```
 
 ### Using the Model in Your Code
@@ -121,6 +124,36 @@ logits = model(input_ids, prefix_lens=prefix_lens, bp_steps=bp_steps)
 # --- Inference (no TBPTT needed) ---
 logits = model(input_ids)
 ```
+
+---
+
+## Training
+
+The `pretraining.py` script implements the complete pre-training loop with:
+
+- **Task-completion objective** — Loss computed only on response tokens
+- **PrefixLM attention masking** — Bidirectional attention over instructions, causal over responses
+- **Truncated BPTT with warmup** — Gradients backpropagate through K steps, starting at 2 and growing to 5
+- **Learning rate schedule** — Linear warmup + cosine decay
+- **AdamAtan2 optimizer** — Epsilon-free variant of Adam using `atan2(m, √v)` instead of `m/(√v + ε)`
+
+### AdamAtan2 Optimizer
+
+This implementation uses the AdamAtan2 optimizer (Bernstein & Newhouse, 2024), which replaces Adam's standard update:
+
+```
+param -= lr × m_hat / (√v_hat + ε)
+```
+
+with an atan2-based update that is naturally bounded and epsilon-free:
+
+```
+param -= lr × (2/π) × atan2(m_hat, √v_hat)
+```
+
+This eliminates the need to tune the epsilon hyperparameter while providing similar convergence characteristics.
+
+> **Reference**: "Old Optimizer, New Norm" ([arXiv:2409.20325](https://arxiv.org/abs/2409.20325))
 
 ---
 
@@ -173,12 +206,24 @@ Uses **SwiGLU**: projects to a gate and value branch, applies `SiLU(gate) × val
 
 ---
 
-## Reference
+## Jupyter Notebook
 
-```
+A Colab-ready Jupyter notebook (`nugie_hrm_text_colab.ipynb`) is included for interactive experimentation with the model architecture.
+
+---
+
+## References
+
+```bibtex
 @article{hrm-text-2025,
   title  = {HRM-Text: Efficient Pretraining Beyond Scaling},
   year   = {2025},
   url    = {https://arxiv.org/abs/2605.20613}
 }
 ```
+
+---
+
+## License
+
+This project is licensed under the Apache-2.0 license. See [LICENSE](LICENSE) for details.

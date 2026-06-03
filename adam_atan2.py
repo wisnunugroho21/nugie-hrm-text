@@ -16,6 +16,7 @@ Reference:
 """
 
 import math
+
 import torch
 from torch.optim import Optimizer
 
@@ -99,8 +100,8 @@ class AdamAtan2(Optimizer):
                 v.mul_(beta2).addcmul_(grad, grad, value=1.0 - beta2)
 
                 # Bias-correction factors.
-                bc1 = 1.0 - beta1 ** t
-                bc2 = 1.0 - beta2 ** t
+                bc1 = 1.0 - beta1**t
+                bc2 = 1.0 - beta2**t
 
                 # Bias-corrected moments.
                 m_hat = m / bc1
