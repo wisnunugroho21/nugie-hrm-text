@@ -1,4 +1,4 @@
-# nugie-hrm-text (Still on-progress)
+# nugie-hrm-text
 
 A minimal PyTorch implementation of **HRM-Text** — a Hierarchical Reasoning Model for language modelling that replaces the standard single-pass Transformer with a dual-timescale recurrent loop.
 
