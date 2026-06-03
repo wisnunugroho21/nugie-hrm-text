@@ -72,7 +72,7 @@ class PretrainConfig:
     vocab_size: int = 32_000
     hidden_size: int = 1024
     num_heads: int = 8
-    num_kv_heads: int = 4  # GQA: fewer KV heads share Q heads
+    num_kv_heads: int | None = None  # GQA: fewer KV heads share Q heads
     H_layers: int = 4  # transformer layers in the slow H module
     L_layers: int = 4  # transformer layers in the fast L module
     H_cycles: int = 2  # outer H cycles per forward pass
