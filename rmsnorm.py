@@ -21,6 +21,10 @@ class RMSNorm(nn.Module):
         self.eps = eps  # small constant for numerical stability
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
-        # Compute the RMS across the last dimension (feature dim), then scale x.
-        # rsqrt(v) = 1 / sqrt(v), so this divides x by its RMS value.
-        return x * torch.rsqrt(x.pow(2).mean(-1, keepdim=True) + self.eps)
+        # Compute RMS in float32 for numerical stability (important for bfloat16 training),
+        # then cast back to the input dtype — matching the official HRM-Text implementation.
+        original_dtype = x.dtype
+        x = x.to(torch.float32)  # Convert to float32 for stable RMS calculation
+
+        x = x * torch.rsqrt(x.pow(2).mean(-1, keepdim=True) + self.eps)  # Normalize by RMS        
+        return x.to(original_dtype)

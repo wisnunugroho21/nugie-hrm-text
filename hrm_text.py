@@ -41,7 +41,7 @@ class HRMText(nn.Module):
         hidden_size: int,
         seq_len: int,
         num_heads: int = 4,
-        num_kv_heads: int = 2,
+        num_kv_heads: int | None = None,  # defaults to num_heads (MHA), set < num_heads for GQA
         H_layers: int = 2,
         L_layers: int = 2,
         H_cycles: int = 3,  # number of outer (high-level) cycles
@@ -53,6 +53,11 @@ class HRMText(nn.Module):
         bp_max_steps: int = 5,  # TBPTT window at the end of warmup
     ):
         super().__init__()
+
+        # Default to MHA (num_kv_heads = num_heads) to match the official HRM-Text-1B,
+        # which uses full multi-head attention (not GQA).
+        if num_kv_heads is None:
+            num_kv_heads = num_heads
 
         # Token embedding with LeCun-style initialization (std = 1/√D).
         # The scale multiplier (√D) is applied at runtime so the effective

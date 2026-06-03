@@ -50,7 +50,7 @@ class HierarchicalReasoningModel(nn.Module):
         hidden_size: int,
         seq_len: int,
         num_heads: int = 4,
-        num_kv_heads: int = 2,
+        num_kv_heads: int | None = None,  # defaults to num_heads (MHA), set < num_heads for GQA
         H_layers: int = 2,
         L_layers: int = 2,
         H_cycles: int = 2,  # number of outer (high-level) cycles
@@ -66,6 +66,11 @@ class HierarchicalReasoningModel(nn.Module):
         self.L_cycles = L_cycles
         self.hidden_size = hidden_size
         self.seq_len = seq_len
+
+        # Default to MHA (num_kv_heads = num_heads) to match the official HRM-Text-1B,
+        # which uses full multi-head attention (not GQA).
+        if num_kv_heads is None:
+            num_kv_heads = num_heads
 
         # TBPTT schedule parameters — stored for compute_bp_steps().
         self.bp_warmup_ratio = bp_warmup_ratio
@@ -86,11 +91,12 @@ class HierarchicalReasoningModel(nn.Module):
             H_layers, hidden_size, num_heads, num_kv_heads, seq_len, norm_eps, expansion
         )
 
-        # Learned initial state for z_L (shape [D], broadcast to [B, T, D]).
-        # z_H starts from the input embeddings so it doesn't need a separate init.
-        zL_init = torch.empty(hidden_size)
-        trunc_normal(zL_init, std=1.0)
-        self.zL_init = nn.Parameter(zL_init)
+        # Fixed initial state for z_L (shape [D], broadcast to [B, T, D]).
+        # Stored as a Buffer (not a Parameter) so it never appears in model.parameters()
+        # and won't be passed to the optimizer. Initialized to zeros, matching the
+        # official HRM-Text implementation. (The official repo uses nn.Parameter with
+        # requires_grad=False only because FSDP2 requires it for tensor sharding.)
+        self.zL_init = nn.Buffer(torch.zeros(hidden_size))
 
     def compute_bp_steps(self, step: int, total_steps: int) -> int:
         """
